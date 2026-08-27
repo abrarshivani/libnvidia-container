@@ -36,11 +36,16 @@ it and `LIB_LDLIBS_STATIC` always links `libnvidia-modprobe-utils.a`.
 
 ## Bundled C Dependency Index
 
-| Dependency | Built when | License (declared) | Pinned in | Source |
-|------------|------------|--------------------|-----------|--------|
-| `elftoolchain` | `WITH_LIBELF=no` | BSD-2-Clause AND BSD-3-Clause | `mk/elftoolchain.mk` | https://sourceforge.net/projects/elftoolchain/files/Sources/elftoolchain-0.7.1/elftoolchain-0.7.1.tar.bz2 |
-| `libtirpc` | `WITH_TIRPC=yes` | BSD-3-Clause | `mk/libtirpc.mk` | https://downloads.sourceforge.net/project/libtirpc/libtirpc/1.3.2/libtirpc-1.3.2.tar.bz2 |
-| `nvidia-modprobe` | `always` | MIT | `mk/nvidia-modprobe.mk` | https://github.com/NVIDIA/nvidia-modprobe/archive/550.54.14.tar.gz |
+`Source` is the archive `make deps` downloads. `Location` is that dependency's
+own license file upstream, pinned to the version built here; each link was
+checked by fetching it and comparing it byte for byte with the copy inside the
+archive. Where a dependency has no license file to link, the column says why.
+
+| Dependency | Built when | License (declared) | Pinned in | Source | Location |
+|------------|------------|--------------------|-----------|--------|----------|
+| `elftoolchain` | `WITH_LIBELF=no` | BSD-2-Clause AND BSD-3-Clause | `mk/elftoolchain.mk` | https://sourceforge.net/projects/elftoolchain/files/Sources/elftoolchain-0.7.1/elftoolchain-0.7.1.tar.bz2 | none in this release; the terms are the per-file notices reproduced below |
+| `libtirpc` | `WITH_TIRPC=yes` | BSD-3-Clause | `mk/libtirpc.mk` | https://downloads.sourceforge.net/project/libtirpc/libtirpc/1.3.2/libtirpc-1.3.2.tar.bz2 | [COPYING](https://git.linux-nfs.org/?p=steved/libtirpc.git;a=blob_plain;f=COPYING;hb=refs/tags/libtirpc-1-3-2) |
+| `nvidia-modprobe` | `always` | MIT | `mk/nvidia-modprobe.mk` | https://github.com/NVIDIA/nvidia-modprobe/archive/550.54.14.tar.gz | not the archive's COPYING, which is GPL-2.0 and covers binaries this repository does not ship; the terms are the per-file notices reproduced below |
 
 ## Go Dependency Index
 

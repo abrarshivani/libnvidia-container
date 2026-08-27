@@ -29,11 +29,19 @@ PLATFORMS=(
     "linux/ppc64le"
 )
 
-# id|makefile|tar members|license files|notice sources|built when|SPDX
+# id|makefile|tar members|license files|notice sources|built when|SPDX|location path|location url
+#
+# The last two fields give the Location column. 'location path' is the license
+# file inside the archive, and 'location url' is where that same file is served
+# upstream; the two are compared byte for byte before either is written. A
+# dependency with no linkable license file sets the path to 'none' and puts the
+# reason in place of the url. That state is spelled out rather than left empty
+# so that a dependency which later gains a license file cannot pick one up
+# silently -- the absence has to be revisited by hand.
 C_DEPS=(
-    "elftoolchain|mk/elftoolchain.mk|common libelf||libelf common/_elftc.h common/elfdefinitions.h|WITH_LIBELF=no|BSD-2-Clause AND BSD-3-Clause"
-    "libtirpc|mk/libtirpc.mk||COPYING|src tirpc|WITH_TIRPC=yes|BSD-3-Clause"
-    "nvidia-modprobe|mk/nvidia-modprobe.mk|modprobe-utils||modprobe-utils|always|MIT"
+    "elftoolchain|mk/elftoolchain.mk|common libelf||libelf common/_elftc.h common/elfdefinitions.h|WITH_LIBELF=no|BSD-2-Clause AND BSD-3-Clause|none|none in this release; the terms are the per-file notices reproduced below"
+    "libtirpc|mk/libtirpc.mk||COPYING|src tirpc|WITH_TIRPC=yes|BSD-3-Clause|COPYING|https://git.linux-nfs.org/?p=steved/libtirpc.git;a=blob_plain;f=COPYING;hb=refs/tags/libtirpc-\$(VERSION_DASHED)"
+    "nvidia-modprobe|mk/nvidia-modprobe.mk|modprobe-utils||modprobe-utils|always|MIT|none|not the archive's COPYING, which is GPL-2.0 and covers binaries this repository does not ship; the terms are the per-file notices reproduced below"
 )
 
 NOTICE_SOURCE_RE='\.(c|h|m4)$'
@@ -253,8 +261,18 @@ read_make_var() {
     printf '%s' "${value}"
 }
 
+sha256_of_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
 expand_make_vars() {
     local value="$1" version="$2" prefix="${3:-}"
+    # libtirpc tags releases with the version's dots turned into dashes.
+    value="${value//\$(VERSION_DASHED)/${version//./-}}"
     value="${value//\$(VERSION)/${version}}"
     value="${value//\$(PREFIX)/${prefix}}"
     # shellcheck disable=SC2016  # matching a literal '$(' left over by make.
@@ -299,6 +317,46 @@ dedupe_notice_blocks() {
         { block = block $0 "\n" }
         END { printf "%d\n", emitted_blocks > "/dev/stderr" }
     '
+}
+
+# A location is written only when the bytes upstream are identical to the copy
+# in the archive the build downloads. Status is not evidence: SourceForge's web
+# view of libtirpc's COPYING answers 200 with a different revision of the file.
+resolve_license_location() {
+    local dependency_id="$1" location_path="$2" location_url="$3"
+    local archive_file remote_file archive_sha remote_sha
+
+    if [[ "${location_path}" == "none" ]]; then
+        [[ -n "${location_url}" ]] \
+            || die "${dependency_id} declares no license file but gives no reason." \
+                   "Put the reason in the last field of its C_DEPS record."
+        printf '%s' "${location_url}"
+        return 0
+    fi
+
+    archive_file="${C_ROOT}/${location_path}"
+    [[ -f "${archive_file}" ]] \
+        || die "${dependency_id} ${C_VERSION} does not contain ${location_path}, which C_DEPS pins as its license file." \
+               "Either the archive layout changed or the record is wrong."
+
+    remote_file="${WORK_DIR}/c/${dependency_id}.location"
+    curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+        --output "${remote_file}" "${location_url}" \
+        || die "could not fetch the license location for ${dependency_id} ${C_VERSION}:" \
+               "  ${location_url}" \
+               "This script needs network access; it will not write an unverified link."
+
+    archive_sha="$(sha256_of_file "${archive_file}")"
+    remote_sha="$(sha256_of_file "${remote_file}")"
+    [[ "${archive_sha}" == "${remote_sha}" ]] \
+        || die "the license location for ${dependency_id} ${C_VERSION} does not serve the bytes the build compiles." \
+               "  url:     ${location_url}" \
+               "  archive: ${location_path}" \
+               "  upstream sha256: ${remote_sha}" \
+               "  archive  sha256: ${archive_sha}" \
+               "Upstream may have retagged, or the URL points at a different revision."
+
+    printf '[%s](%s)' "${location_path}" "${location_url}"
 }
 
 fetch_c_dependency() {
@@ -349,12 +407,18 @@ fetch_c_dependency() {
 
 collect_c_notices() {
     local dependency_record dependency_id makefile tar_members license_files
-    local notice_paths build_condition declared_license
+    local notice_paths build_condition declared_license location_path location_url
     local notices_file blocks_file path source_file scanned_file_count distinct_notice_count
+    local location_cell
 
     for dependency_record in "${C_DEPS[@]}"; do
         IFS='|' read -r dependency_id makefile tar_members license_files \
-            notice_paths build_condition declared_license <<< "${dependency_record}"
+            notice_paths build_condition declared_license location_path location_url \
+            <<< "${dependency_record}"
+
+        [[ -n "${location_path}" ]] \
+            || die "${dependency_id} has no license-location field in C_DEPS." \
+                   "Give it a path and a url, or 'none' and a reason."
 
         fetch_c_dependency "${dependency_id}" "${makefile}" "${tar_members}"
 
@@ -394,9 +458,13 @@ collect_c_notices() {
         [[ -s "${notices_file}" ]] \
             || die "no license text collected for ${dependency_id} ${C_VERSION}."
 
-        printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        location_cell="$(resolve_license_location "${dependency_id}" "${location_path}" \
+            "$(expand_make_vars "${location_url}" "${C_VERSION}")")"
+
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
             "${dependency_id}" "${C_VERSION}" "${build_condition}" "${declared_license}" \
-            "${C_URL}" "${makefile}" "${scanned_file_count}" "${distinct_notice_count}" >> "${C_INDEX}"
+            "${C_URL}" "${makefile}" "${scanned_file_count}" "${distinct_notice_count}" \
+            "${location_cell}" >> "${C_INDEX}"
         log "  ${dependency_id} ${C_VERSION}: ${distinct_notice_count} distinct notices from ${scanned_file_count} files"
     done
 
@@ -430,23 +498,25 @@ emit_fenced_file() {
 }
 
 emit_c_table() {
-    local dependency_id version build_condition declared_license url makefile rest
-    printf '| Dependency | Built when | License (declared) | Pinned in | Source |\n'
-    printf '|------------|------------|--------------------|-----------|--------|\n'
-    while IFS='|' read -r dependency_id version build_condition declared_license url makefile rest; do
+    local dependency_id version build_condition declared_license url makefile
+    local scanned_file_count distinct_notice_count location
+    printf '| Dependency | Built when | License (declared) | Pinned in | Source | Location |\n'
+    printf '|------------|------------|--------------------|-----------|--------|----------|\n'
+    while IFS='|' read -r dependency_id version build_condition declared_license url makefile \
+        scanned_file_count distinct_notice_count location; do
         [[ -z "${dependency_id}" ]] && continue
         # shellcheck disable=SC2016  # backticks are literal markdown here.
-        printf '| `%s` | `%s` | %s | `%s` | %s |\n' \
+        printf '| `%s` | `%s` | %s | `%s` | %s | %s |\n' \
             "${dependency_id}" "${build_condition}" "${declared_license}" \
-            "${makefile}" "${url}"
+            "${makefile}" "${url}" "${location}"
     done < "${C_INDEX}"
 }
 
 emit_c_sections() {
     local dependency_id version build_condition declared_license url makefile
-    local scanned_file_count distinct_notice_count
+    local scanned_file_count distinct_notice_count location
     while IFS='|' read -r dependency_id version build_condition declared_license url makefile \
-        scanned_file_count distinct_notice_count; do
+        scanned_file_count distinct_notice_count location; do
         [[ -z "${dependency_id}" ]] && continue
         printf '### %s\n\n' "${dependency_id}"
         printf '* Declared license: %s\n' "${declared_license}"
@@ -545,6 +615,11 @@ EOF
 it and `LIB_LDLIBS_STATIC` always links `libnvidia-modprobe-utils.a`.
 
 ## Bundled C Dependency Index
+
+`Source` is the archive `make deps` downloads. `Location` is that dependency's
+own license file upstream, pinned to the version built here; each link was
+checked by fetching it and comparing it byte for byte with the copy inside the
+archive. Where a dependency has no license file to link, the column says why.
 
 EOF
         emit_c_table
