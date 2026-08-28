@@ -36,21 +36,31 @@ it and `LIB_LDLIBS_STATIC` always links `libnvidia-modprobe-utils.a`.
 
 ## Bundled C Dependency Index
 
-| Dependency | Built when | License (declared) | Pinned in | Source |
-|------------|------------|--------------------|-----------|--------|
-| `elftoolchain` | `WITH_LIBELF=no` | BSD-2-Clause AND BSD-3-Clause | `mk/elftoolchain.mk` | https://sourceforge.net/projects/elftoolchain/files/Sources/elftoolchain-0.7.1/elftoolchain-0.7.1.tar.bz2 |
-| `libtirpc` | `WITH_TIRPC=yes` | BSD-3-Clause | `mk/libtirpc.mk` | https://downloads.sourceforge.net/project/libtirpc/libtirpc/1.3.2/libtirpc-1.3.2.tar.bz2 |
-| `nvidia-modprobe` | `always` | MIT | `mk/nvidia-modprobe.mk` | https://github.com/NVIDIA/nvidia-modprobe/archive/550.54.14.tar.gz |
+`Source` is the archive `make deps` downloads. `Location` is that dependency's
+own license file upstream, pinned to the version built here; each link was
+checked by fetching it and comparing it byte for byte with the copy inside the
+archive. Where a dependency has no license file to link, the column says why.
+
+| Dependency | Built when | License (declared) | Pinned in | Source | Location |
+|------------|------------|--------------------|-----------|--------|----------|
+| `elftoolchain` | `WITH_LIBELF=no` | BSD-2-Clause AND BSD-3-Clause | `mk/elftoolchain.mk` | https://sourceforge.net/projects/elftoolchain/files/Sources/elftoolchain-0.7.1/elftoolchain-0.7.1.tar.bz2 | none in this release; the terms are the per-file notices reproduced below |
+| `libtirpc` | `WITH_TIRPC=yes` | BSD-3-Clause | `mk/libtirpc.mk` | https://downloads.sourceforge.net/project/libtirpc/libtirpc/1.3.2/libtirpc-1.3.2.tar.bz2 | [COPYING](https://git.linux-nfs.org/?p=steved/libtirpc.git;a=blob_plain;f=COPYING;hb=refs/tags/libtirpc-1-3-2) |
+| `nvidia-modprobe` | `always` | MIT | `mk/nvidia-modprobe.mk` | https://github.com/NVIDIA/nvidia-modprobe/archive/550.54.14.tar.gz | not the archive's COPYING, which is GPL-2.0 and covers binaries this repository does not ship; the terms are the per-file notices reproduced below |
 
 ## Go Dependency Index
 
-| Package | License | Module |
-|---------|---------|--------|
-| `github.com/cilium/ebpf` | MIT | `github.com/cilium/ebpf` |
-| `github.com/google/uuid` | BSD-3-Clause | `github.com/google/uuid` |
-| `github.com/opencontainers/runtime-spec/specs-go` | Apache-2.0 | `github.com/opencontainers/runtime-spec` |
-| `github.com/sirupsen/logrus` | MIT | `github.com/sirupsen/logrus` |
-| `golang.org/x/sys/unix` | BSD-3-Clause | `golang.org/x/sys` |
+`Version` is the version vendored under `src/nvcgo/vendor` and linked into
+`libnvidia-container-go.so`. `Location` is that version's own license file
+upstream; as in the table above, each link was checked by fetching it and
+comparing it byte for byte with the text reproduced below.
+
+| Package | Version | License | Location |
+|---------|---------|---------|----------|
+| `github.com/cilium/ebpf` | v0.8.0 | MIT | [LICENSE](https://raw.githubusercontent.com/cilium/ebpf/v0.8.0/LICENSE) |
+| `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [LICENSE](https://raw.githubusercontent.com/google/uuid/v1.6.0/LICENSE) |
+| `github.com/opencontainers/runtime-spec/specs-go` | v1.2.0 | Apache-2.0 | [LICENSE](https://raw.githubusercontent.com/opencontainers/runtime-spec/v1.2.0/LICENSE) |
+| `github.com/sirupsen/logrus` | v1.9.4 | MIT | [LICENSE](https://raw.githubusercontent.com/sirupsen/logrus/v1.9.4/LICENSE) |
+| `golang.org/x/sys/unix` | v0.46.0 | BSD-3-Clause | [LICENSE](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/LICENSE?format=TEXT) / [PATENTS](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/PATENTS?format=TEXT) |
 
 ## Bundled C Dependency License Texts
 
@@ -2002,8 +2012,8 @@ with the sysfs/PCI kernel facility.
 
 ### github.com/cilium/ebpf
 
+* Version: v0.8.0
 * License: MIT
-* Module: github.com/cilium/ebpf
 
 #### LICENSE
 
@@ -2037,8 +2047,8 @@ SOFTWARE.
 
 ### github.com/google/uuid
 
+* Version: v1.6.0
 * License: BSD-3-Clause
-* Module: github.com/google/uuid
 
 #### LICENSE
 
@@ -2076,8 +2086,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### github.com/opencontainers/runtime-spec/specs-go
 
+* Version: v1.2.0
 * License: Apache-2.0
-* Module: github.com/opencontainers/runtime-spec
 
 #### LICENSE
 
@@ -2279,8 +2289,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### github.com/sirupsen/logrus
 
+* Version: v1.9.4
 * License: MIT
-* Module: github.com/sirupsen/logrus
 
 #### LICENSE
 
@@ -2312,8 +2322,8 @@ THE SOFTWARE.
 
 ### golang.org/x/sys/unix
 
+* Version: v0.46.0
 * License: BSD-3-Clause
-* Module: golang.org/x/sys
 
 #### LICENSE
 
@@ -2345,6 +2355,34 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+```
+
+#### PATENTS
+
+```text
+Additional IP Rights Grant (Patents)
+
+"This implementation" means the copyrightable works distributed by
+Google as part of the Go project.
+
+Google hereby grants to You a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable (except as stated in this section)
+patent license to make, have made, use, offer to sell, sell, import,
+transfer and otherwise run, modify and propagate the contents of this
+implementation of Go, where such license applies only to those patent
+claims, both currently owned or controlled by Google and acquired in
+the future, licensable by Google that are necessarily infringed by this
+implementation of Go.  This grant does not include claims that would be
+infringed only as a consequence of further modification of this
+implementation.  If you or your agent or exclusive licensee institute or
+order or agree to the institution of patent litigation against any
+entity (including a cross-claim or counterclaim in a lawsuit) alleging
+that this implementation of Go or any code incorporated within this
+implementation of Go constitutes direct or contributory patent
+infringement, or inducement of patent infringement, then any patent
+rights granted to you under this License for this implementation of Go
+shall terminate as of the date such litigation is filed.
 
 ```
 

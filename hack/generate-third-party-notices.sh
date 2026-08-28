@@ -17,7 +17,8 @@ set -euo pipefail
 
 OUTPUT="${OUTPUT:-THIRD_PARTY_NOTICES.md}"
 GO_DIR="${GO_DIR:-src/nvcgo}"
-MODULES_TXT="${MODULES_TXT:-${GO_DIR}/vendor/modules.txt}"
+GO_VENDOR_DIR="${GO_VENDOR_DIR:-${GO_DIR}/vendor}"
+MODULES_TXT="${MODULES_TXT:-${GO_VENDOR_DIR}/modules.txt}"
 ROOT_MK="${ROOT_MK:-Makefile}"
 DOCKER_MK="${DOCKER_MK:-mk/docker.mk}"
 
@@ -29,11 +30,19 @@ PLATFORMS=(
     "linux/ppc64le"
 )
 
-# id|makefile|tar members|license files|notice sources|built when|SPDX
+# id|makefile|tar members|license files|notice sources|built when|SPDX|location path|location url
+#
+# The last two fields give the Location column. 'location path' is the license
+# file inside the archive, and 'location url' is where that same file is served
+# upstream; the two are compared byte for byte before either is written. A
+# dependency with no linkable license file sets the path to 'none' and puts the
+# reason in place of the url. That state is spelled out rather than left empty
+# so that a dependency which later gains a license file cannot pick one up
+# silently -- the absence has to be revisited by hand.
 C_DEPS=(
-    "elftoolchain|mk/elftoolchain.mk|common libelf||libelf common/_elftc.h common/elfdefinitions.h|WITH_LIBELF=no|BSD-2-Clause AND BSD-3-Clause"
-    "libtirpc|mk/libtirpc.mk||COPYING|src tirpc|WITH_TIRPC=yes|BSD-3-Clause"
-    "nvidia-modprobe|mk/nvidia-modprobe.mk|modprobe-utils||modprobe-utils|always|MIT"
+    "elftoolchain|mk/elftoolchain.mk|common libelf||libelf common/_elftc.h common/elfdefinitions.h|WITH_LIBELF=no|BSD-2-Clause AND BSD-3-Clause|none|none in this release; the terms are the per-file notices reproduced below"
+    "libtirpc|mk/libtirpc.mk||COPYING|src tirpc|WITH_TIRPC=yes|BSD-3-Clause|COPYING|https://git.linux-nfs.org/?p=steved/libtirpc.git;a=blob_plain;f=COPYING;hb=refs/tags/libtirpc-\$(VERSION_DASHED)"
+    "nvidia-modprobe|mk/nvidia-modprobe.mk|modprobe-utils||modprobe-utils|always|MIT|none|not the archive's COPYING, which is GPL-2.0 and covers binaries this repository does not ship; the terms are the per-file notices reproduced below"
 )
 
 NOTICE_SOURCE_RE='\.(c|h|m4)$'
@@ -131,7 +140,7 @@ prepare_workspace() {
     GO_CSV="${WORK_DIR}/go.csv"
     GO_INDEX="${WORK_DIR}/go.index"
     C_INDEX="${WORK_DIR}/c.index"
-    mkdir -p "${LICENSES_DIR}"
+    mkdir -p "${LICENSES_DIR}" "${WORK_DIR}/go"
     : > "${GO_CSV}"
     : > "${C_INDEX}"
 
@@ -203,9 +212,11 @@ append_module_paths() {
                     }
                     module_paths[++module_count] = fields[2]
                     upstream_path[fields[2]] = fields[replacement_field]
+                    upstream_version[fields[2]] = fields[replacement_field + 1]
                 } else {
                     module_paths[++module_count] = fields[2]
                     upstream_path[fields[2]] = fields[2]
+                    upstream_version[fields[2]] = fields[3]
                 }
             }
             close(modules_txt)
@@ -222,7 +233,8 @@ append_module_paths() {
                     && length(module_path) > length(longest_match))
                     longest_match = module_path
             }
-            print $0, (longest_match == "" ? "unknown" : upstream_path[longest_match])
+            print $0, (longest_match == "" ? "unknown" : upstream_path[longest_match]), \
+                      (longest_match == "" ? "unknown" : upstream_version[longest_match])
         }
     '
 }
@@ -239,6 +251,11 @@ build_go_index() {
             "Re-run 'go mod vendor' in ${GO_DIR}; if it persists, fix append_module_paths in hack/generate-third-party-notices.sh."
     fi
 
+    if cut -d, -f5 "${GO_INDEX}" | LC_ALL=C grep -qE '^$|^unknown$'; then
+        die "some packages could not be matched to a module version in ${MODULES_TXT}." \
+            "Re-run 'go mod vendor' in ${GO_DIR} rather than committing rows without a version."
+    fi
+
     if cut -d, -f3 "${GO_INDEX}" | LC_ALL=C grep -qE '^$|(^| / )Unknown( / |$)'; then
         die "go-licenses could not classify the license of some packages." \
             "Identify them by hand rather than committing a file that says Unknown."
@@ -253,8 +270,61 @@ read_make_var() {
     printf '%s' "${value}"
 }
 
+# Gerrit serves blobs base64-encoded behind ?format=TEXT; GitHub serves them
+# raw. Everything downstream wants the decoded bytes.
+fetch_license_bytes() {
+    local url="$1" destination="$2" label="$3"
+    curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+        --output "${destination}.encoded" "${url}" \
+        || die "could not fetch the license location for ${label}:" \
+               "  ${url}" \
+               "This script needs network access; it will not write an unverified link."
+    case "${url}" in
+        *'?format=TEXT')
+            # GNU coreutils spells the decode flag -d, BSD spells it -D.
+            if base64 -d < "${destination}.encoded" > "${destination}" 2>/dev/null; then
+                :
+            elif base64 -D < "${destination}.encoded" > "${destination}" 2>/dev/null; then
+                :
+            else
+                die "could not base64-decode the license location for ${label}:" "  ${url}"
+            fi
+            ;;
+        *)
+            mv -f "${destination}.encoded" "${destination}"
+            ;;
+    esac
+}
+
+# A link is only written once the bytes behind it match the copy reproduced in
+# this document. A 200 proves nothing: upstream hosts serve the wrong revision
+# for a plausible-looking URL often enough that status alone is not evidence.
+verify_remote_matches() {
+    local url="$1" local_file="$2" label="$3" remote_file="$4"
+    local local_sha remote_sha
+    fetch_license_bytes "${url}" "${remote_file}" "${label}"
+    local_sha="$(sha256_of_file "${local_file}")"
+    remote_sha="$(sha256_of_file "${remote_file}")"
+    [[ "${local_sha}" == "${remote_sha}" ]] \
+        || die "the license location for ${label} does not serve the bytes reproduced here." \
+               "  url:             ${url}" \
+               "  upstream sha256: ${remote_sha}" \
+               "  local    sha256: ${local_sha}" \
+               "Upstream may have retagged, or the URL points at a different revision."
+}
+
+sha256_of_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
 expand_make_vars() {
     local value="$1" version="$2" prefix="${3:-}"
+    # libtirpc tags releases with the version's dots turned into dashes.
+    value="${value//\$(VERSION_DASHED)/${version//./-}}"
     value="${value//\$(VERSION)/${version}}"
     value="${value//\$(PREFIX)/${prefix}}"
     # shellcheck disable=SC2016  # matching a literal '$(' left over by make.
@@ -299,6 +369,33 @@ dedupe_notice_blocks() {
         { block = block $0 "\n" }
         END { printf "%d\n", emitted_blocks > "/dev/stderr" }
     '
+}
+
+# A location is written only when the bytes upstream are identical to the copy
+# in the archive the build downloads. Status is not evidence: SourceForge's web
+# view of libtirpc's COPYING answers 200 with a different revision of the file.
+resolve_license_location() {
+    local dependency_id="$1" location_path="$2" location_url="$3"
+    local archive_file remote_file
+
+    if [[ "${location_path}" == "none" ]]; then
+        [[ -n "${location_url}" ]] \
+            || die "${dependency_id} declares no license file but gives no reason." \
+                   "Put the reason in the last field of its C_DEPS record."
+        printf '%s' "${location_url}"
+        return 0
+    fi
+
+    archive_file="${C_ROOT}/${location_path}"
+    [[ -f "${archive_file}" ]] \
+        || die "${dependency_id} ${C_VERSION} does not contain ${location_path}, which C_DEPS pins as its license file." \
+               "Either the archive layout changed or the record is wrong."
+
+    remote_file="${WORK_DIR}/c/${dependency_id}.location"
+    verify_remote_matches "${location_url}" "${archive_file}" \
+        "${dependency_id} ${C_VERSION} ${location_path}" "${remote_file}"
+
+    printf '[%s](%s)' "${location_path}" "${location_url}"
 }
 
 fetch_c_dependency() {
@@ -349,12 +446,18 @@ fetch_c_dependency() {
 
 collect_c_notices() {
     local dependency_record dependency_id makefile tar_members license_files
-    local notice_paths build_condition declared_license
+    local notice_paths build_condition declared_license location_path location_url
     local notices_file blocks_file path source_file scanned_file_count distinct_notice_count
+    local location_cell
 
     for dependency_record in "${C_DEPS[@]}"; do
         IFS='|' read -r dependency_id makefile tar_members license_files \
-            notice_paths build_condition declared_license <<< "${dependency_record}"
+            notice_paths build_condition declared_license location_path location_url \
+            <<< "${dependency_record}"
+
+        [[ -n "${location_path}" ]] \
+            || die "${dependency_id} has no license-location field in C_DEPS." \
+                   "Give it a path and a url, or 'none' and a reason."
 
         fetch_c_dependency "${dependency_id}" "${makefile}" "${tar_members}"
 
@@ -394,9 +497,13 @@ collect_c_notices() {
         [[ -s "${notices_file}" ]] \
             || die "no license text collected for ${dependency_id} ${C_VERSION}."
 
-        printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        location_cell="$(resolve_license_location "${dependency_id}" "${location_path}" \
+            "$(expand_make_vars "${location_url}" "${C_VERSION}")")"
+
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
             "${dependency_id}" "${C_VERSION}" "${build_condition}" "${declared_license}" \
-            "${C_URL}" "${makefile}" "${scanned_file_count}" "${distinct_notice_count}" >> "${C_INDEX}"
+            "${C_URL}" "${makefile}" "${scanned_file_count}" "${distinct_notice_count}" \
+            "${location_cell}" >> "${C_INDEX}"
         log "  ${dependency_id} ${C_VERSION}: ${distinct_notice_count} distinct notices from ${scanned_file_count} files"
     done
 
@@ -409,14 +516,55 @@ collect_c_notices() {
 }
 
 license_files_for() {
-    local dir="$1" candidate_file
+    local dir="$1" candidate_file candidate_name
     [[ -d "${dir}" ]] || return 0
     while IFS= read -r -d '' candidate_file; do
-        if printf '%s' "$(basename "${candidate_file}")" \
+        candidate_name="$(basename "${candidate_file}")"
+        # Reading the vendor tree rather than a licenses-only cache means the
+        # name pattern below now also sees source files that merely start with
+        # a license-shaped header, such as a license.go.
+        case "${candidate_name}" in
+            *.go|*.c|*.h|*.s|*.py|*.sh|*.java|*.ts|*.js) continue ;;
+        esac
+        if printf '%s' "${candidate_name}" \
             | LC_ALL=C grep -qiE '^(licen[cs]e|notice|copying|copyright|authors|patents)([-._].*)?$'; then
             printf '%s\n' "${candidate_file}"
         fi
     done < <(find "${dir}" -maxdepth 1 -type f -print0 2>/dev/null | LC_ALL=C sort -z)
+}
+
+# The first enclosing directory holding a license file wins, which is how
+# go-licenses attributes them. Prints the directory relative to the module root.
+license_dir_within_module() {
+    local dir="$1" module="$2" relative
+    while :; do
+        if [[ -n "$(license_files_for "${GO_VENDOR_DIR}/${dir}")" ]]; then
+            relative="${dir#"${module}"}"
+            printf '%s' "${relative#/}"
+            return 0
+        fi
+        [[ "${dir}" == "${module}" ]] && return 1
+        [[ "${dir}" != */* ]] && return 1
+        dir="${dir%/*}"
+    done
+}
+
+# Every license file the module ships, as paths relative to its root. Reading
+# the vendor tree rather than the 'go-licenses save' output is deliberate: save
+# keeps only the one file it classifies as the license and drops the rest, so
+# golang.org/x/sys lost its PATENTS grant, which is separate terms rather than
+# a restatement of the LICENSE beside it.
+go_license_paths_for() {
+    local package_path="$1" module_path="$2" relative_dir governing_dir license_file
+    relative_dir="$(license_dir_within_module "${package_path}" "${module_path}")" \
+        || die "no license file found for ${package_path} under ${GO_VENDOR_DIR}/${module_path}." \
+               "Re-run 'go mod vendor' in ${GO_DIR}."
+    governing_dir="${GO_VENDOR_DIR}/${module_path}${relative_dir:+/${relative_dir}}"
+    while IFS= read -r license_file; do
+        [[ -z "${license_file}" ]] && continue
+        printf '%s\t%s\n' \
+            "${relative_dir:+${relative_dir}/}$(basename "${license_file}")" "${license_file}"
+    done < <(license_files_for "${governing_dir}")
 }
 
 emit_fenced_file() {
@@ -430,23 +578,25 @@ emit_fenced_file() {
 }
 
 emit_c_table() {
-    local dependency_id version build_condition declared_license url makefile rest
-    printf '| Dependency | Built when | License (declared) | Pinned in | Source |\n'
-    printf '|------------|------------|--------------------|-----------|--------|\n'
-    while IFS='|' read -r dependency_id version build_condition declared_license url makefile rest; do
+    local dependency_id version build_condition declared_license url makefile
+    local scanned_file_count distinct_notice_count location
+    printf '| Dependency | Built when | License (declared) | Pinned in | Source | Location |\n'
+    printf '|------------|------------|--------------------|-----------|--------|----------|\n'
+    while IFS='|' read -r dependency_id version build_condition declared_license url makefile \
+        scanned_file_count distinct_notice_count location; do
         [[ -z "${dependency_id}" ]] && continue
         # shellcheck disable=SC2016  # backticks are literal markdown here.
-        printf '| `%s` | `%s` | %s | `%s` | %s |\n' \
+        printf '| `%s` | `%s` | %s | `%s` | %s | %s |\n' \
             "${dependency_id}" "${build_condition}" "${declared_license}" \
-            "${makefile}" "${url}"
+            "${makefile}" "${url}" "${location}"
     done < "${C_INDEX}"
 }
 
 emit_c_sections() {
     local dependency_id version build_condition declared_license url makefile
-    local scanned_file_count distinct_notice_count
+    local scanned_file_count distinct_notice_count location
     while IFS='|' read -r dependency_id version build_condition declared_license url makefile \
-        scanned_file_count distinct_notice_count; do
+        scanned_file_count distinct_notice_count location; do
         [[ -z "${dependency_id}" ]] && continue
         printf '### %s\n\n' "${dependency_id}"
         printf '* Declared license: %s\n' "${declared_license}"
@@ -461,33 +611,81 @@ emit_c_sections() {
     done < "${C_INDEX}"
 }
 
+# Only the two module hosts this repository actually vendors are understood.
+# Anything else stops the run rather than guessing a URL shape: a link that
+# resolves to the wrong project is worse in a license document than no link.
+go_license_url() {
+    local module="$1" version="$2" path_in_module="$3" remainder organisation repository
+    case "${module}" in
+        github.com/*/*)
+            remainder="${module#github.com/}"
+            organisation="${remainder%%/*}"
+            remainder="${remainder#*/}"
+            repository="${remainder%%/*}"
+            printf 'https://raw.githubusercontent.com/%s/%s/%s/%s' \
+                "${organisation}" "${repository}" "${version}" "${path_in_module}"
+            ;;
+        golang.org/x/*)
+            printf 'https://go.googlesource.com/%s/+/refs/tags/%s/%s?format=TEXT' \
+                "${module#golang.org/x/}" "${version}" "${path_in_module}"
+            ;;
+        *)
+            die "no license URL rule for the module ${module}." \
+                "Add one to go_license_url in hack/generate-third-party-notices.sh;" \
+                "this script will not guess a URL for a host it does not know."
+            ;;
+    esac
+}
+
+# Mirrors the C side: every file reproduced below gets a link, and the link is
+# only kept once its bytes match that reproduction.
+resolve_go_location() {
+    local package_path="$1" module_path="$2" version="$3"
+    local location_cell="" path_in_module license_file file_name url remote_file package_path_slug
+    package_path_slug="$(printf '%s' "${package_path}" | tr '/' '_')"
+    while IFS=$'\t' read -r path_in_module license_file; do
+        [[ -z "${path_in_module}" ]] && continue
+        file_name="$(basename "${license_file}")"
+        url="$(go_license_url "${module_path}" "${version}" "${path_in_module}")"
+        remote_file="${WORK_DIR}/go/${package_path_slug}.${file_name}"
+        verify_remote_matches "${url}" "${license_file}" \
+            "${module_path} ${version} ${path_in_module}" "${remote_file}"
+        location_cell="${location_cell:+${location_cell} / }[${file_name}](${url})"
+    done < <(go_license_paths_for "${package_path}" "${module_path}")
+    [[ -n "${location_cell}" ]] \
+        || die "no license file found for ${package_path}; refusing to write a row without a verified location."
+    printf '%s' "${location_cell}"
+}
+
 emit_go_table() {
-    local package_path url license module_path
-    printf '| Package | License | Module |\n'
-    printf '|---------|---------|--------|\n'
-    while IFS=, read -r package_path url license module_path; do
+    local package_path url license module_path version location
+    printf '| Package | Version | License | Location |\n'
+    printf '|---------|---------|---------|----------|\n'
+    while IFS=, read -r package_path url license module_path version; do
         [[ -z "${package_path}" ]] && continue
+        location="$(resolve_go_location "${package_path}" "${module_path}" "${version}")"
         # shellcheck disable=SC2016  # backticks are literal markdown here.
-        printf '| `%s` | %s | `%s` |\n' "${package_path}" "${license}" "${module_path}"
+        printf '| `%s` | %s | %s | %s |\n' \
+            "${package_path}" "${version}" "${license}" "${location}"
     done < "${GO_INDEX}"
 }
 
 emit_go_sections() {
-    local package_path url license module_path license_files license_file
-    while IFS=, read -r package_path url license module_path; do
+    local package_path url license module_path version license_files license_file path_in_module
+    while IFS=, read -r package_path url license module_path version; do
         [[ -z "${package_path}" ]] && continue
 
         printf '### %s\n\n' "${package_path}"
-        printf '* License: %s\n' "${license}"
-        printf '* Module: %s\n\n' "${module_path}"
+        printf '* Version: %s\n' "${version}"
+        printf '* License: %s\n\n' "${license}"
 
         license_files=()
-        while IFS= read -r license_file; do
-            [[ -n "${license_file}" ]] && license_files+=("${license_file}")
-        done < <(license_files_for "${LICENSES_DIR}/${package_path}")
+        while IFS=$'\t' read -r path_in_module license_file; do
+            [[ -n "${path_in_module}" ]] && license_files+=("${license_file}")
+        done < <(go_license_paths_for "${package_path}" "${module_path}")
 
         (( ${#license_files[@]} > 0 )) \
-            || die "no license text was saved for ${package_path}; refusing to write a notices file that omits it."
+            || die "no license file found for ${package_path}; refusing to write a notices file that omits it."
 
         for license_file in "${license_files[@]}"; do
             printf '#### %s\n\n' "$(basename "${license_file}")"
@@ -546,12 +744,22 @@ it and `LIB_LDLIBS_STATIC` always links `libnvidia-modprobe-utils.a`.
 
 ## Bundled C Dependency Index
 
+`Source` is the archive `make deps` downloads. `Location` is that dependency's
+own license file upstream, pinned to the version built here; each link was
+checked by fetching it and comparing it byte for byte with the copy inside the
+archive. Where a dependency has no license file to link, the column says why.
+
 EOF
         emit_c_table
 
         cat <<'EOF'
 
 ## Go Dependency Index
+
+`Version` is the version vendored under `src/nvcgo/vendor` and linked into
+`libnvidia-container-go.so`. `Location` is that version's own license file
+upstream; as in the table above, each link was checked by fetching it and
+comparing it byte for byte with the text reproduced below.
 
 EOF
         emit_go_table
