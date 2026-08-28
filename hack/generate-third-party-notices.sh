@@ -139,7 +139,7 @@ prepare_workspace() {
     GO_CSV="${WORK_DIR}/go.csv"
     GO_INDEX="${WORK_DIR}/go.index"
     C_INDEX="${WORK_DIR}/c.index"
-    mkdir -p "${LICENSES_DIR}"
+    mkdir -p "${LICENSES_DIR}" "${WORK_DIR}/go"
     : > "${GO_CSV}"
     : > "${C_INDEX}"
 
@@ -211,9 +211,11 @@ append_module_paths() {
                     }
                     module_paths[++module_count] = fields[2]
                     upstream_path[fields[2]] = fields[replacement_field]
+                    upstream_version[fields[2]] = fields[replacement_field + 1]
                 } else {
                     module_paths[++module_count] = fields[2]
                     upstream_path[fields[2]] = fields[2]
+                    upstream_version[fields[2]] = fields[3]
                 }
             }
             close(modules_txt)
@@ -230,7 +232,8 @@ append_module_paths() {
                     && length(module_path) > length(longest_match))
                     longest_match = module_path
             }
-            print $0, (longest_match == "" ? "unknown" : upstream_path[longest_match])
+            print $0, (longest_match == "" ? "unknown" : upstream_path[longest_match]), \
+                      (longest_match == "" ? "unknown" : upstream_version[longest_match])
         }
     '
 }
@@ -247,6 +250,11 @@ build_go_index() {
             "Re-run 'go mod vendor' in ${GO_DIR}; if it persists, fix append_module_paths in hack/generate-third-party-notices.sh."
     fi
 
+    if cut -d, -f5 "${GO_INDEX}" | LC_ALL=C grep -qE '^$|^unknown$'; then
+        die "some packages could not be matched to a module version in ${MODULES_TXT}." \
+            "Re-run 'go mod vendor' in ${GO_DIR} rather than committing rows without a version."
+    fi
+
     if cut -d, -f3 "${GO_INDEX}" | LC_ALL=C grep -qE '^$|(^| / )Unknown( / |$)'; then
         die "go-licenses could not classify the license of some packages." \
             "Identify them by hand rather than committing a file that says Unknown."
@@ -259,6 +267,49 @@ read_make_var() {
     value="${value%"${value##*[![:space:]]}"}"
     [[ -n "${value}" ]] || die "could not read ${name} from ${file}."
     printf '%s' "${value}"
+}
+
+# Gerrit serves blobs base64-encoded behind ?format=TEXT; GitHub serves them
+# raw. Everything downstream wants the decoded bytes.
+fetch_license_bytes() {
+    local url="$1" destination="$2" label="$3"
+    curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+        --output "${destination}.encoded" "${url}" \
+        || die "could not fetch the license location for ${label}:" \
+               "  ${url}" \
+               "This script needs network access; it will not write an unverified link."
+    case "${url}" in
+        *'?format=TEXT')
+            # GNU coreutils spells the decode flag -d, BSD spells it -D.
+            if base64 -d < "${destination}.encoded" > "${destination}" 2>/dev/null; then
+                :
+            elif base64 -D < "${destination}.encoded" > "${destination}" 2>/dev/null; then
+                :
+            else
+                die "could not base64-decode the license location for ${label}:" "  ${url}"
+            fi
+            ;;
+        *)
+            mv -f "${destination}.encoded" "${destination}"
+            ;;
+    esac
+}
+
+# A link is only written once the bytes behind it match the copy reproduced in
+# this document. A 200 proves nothing: upstream hosts serve the wrong revision
+# for a plausible-looking URL often enough that status alone is not evidence.
+verify_remote_matches() {
+    local url="$1" local_file="$2" label="$3" remote_file="$4"
+    local local_sha remote_sha
+    fetch_license_bytes "${url}" "${remote_file}" "${label}"
+    local_sha="$(sha256_of_file "${local_file}")"
+    remote_sha="$(sha256_of_file "${remote_file}")"
+    [[ "${local_sha}" == "${remote_sha}" ]] \
+        || die "the license location for ${label} does not serve the bytes reproduced here." \
+               "  url:             ${url}" \
+               "  upstream sha256: ${remote_sha}" \
+               "  local    sha256: ${local_sha}" \
+               "Upstream may have retagged, or the URL points at a different revision."
 }
 
 sha256_of_file() {
@@ -324,7 +375,7 @@ dedupe_notice_blocks() {
 # view of libtirpc's COPYING answers 200 with a different revision of the file.
 resolve_license_location() {
     local dependency_id="$1" location_path="$2" location_url="$3"
-    local archive_file remote_file archive_sha remote_sha
+    local archive_file remote_file
 
     if [[ "${location_path}" == "none" ]]; then
         [[ -n "${location_url}" ]] \
@@ -340,21 +391,8 @@ resolve_license_location() {
                "Either the archive layout changed or the record is wrong."
 
     remote_file="${WORK_DIR}/c/${dependency_id}.location"
-    curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
-        --output "${remote_file}" "${location_url}" \
-        || die "could not fetch the license location for ${dependency_id} ${C_VERSION}:" \
-               "  ${location_url}" \
-               "This script needs network access; it will not write an unverified link."
-
-    archive_sha="$(sha256_of_file "${archive_file}")"
-    remote_sha="$(sha256_of_file "${remote_file}")"
-    [[ "${archive_sha}" == "${remote_sha}" ]] \
-        || die "the license location for ${dependency_id} ${C_VERSION} does not serve the bytes the build compiles." \
-               "  url:     ${location_url}" \
-               "  archive: ${location_path}" \
-               "  upstream sha256: ${remote_sha}" \
-               "  archive  sha256: ${archive_sha}" \
-               "Upstream may have retagged, or the URL points at a different revision."
+    verify_remote_matches "${location_url}" "${archive_file}" \
+        "${dependency_id} ${C_VERSION} ${location_path}" "${remote_file}"
 
     printf '[%s](%s)' "${location_path}" "${location_url}"
 }
@@ -531,20 +569,68 @@ emit_c_sections() {
     done < "${C_INDEX}"
 }
 
+# Only the two module hosts this repository actually vendors are understood.
+# Anything else stops the run rather than guessing a URL shape: a link that
+# resolves to the wrong project is worse in a license document than no link.
+go_license_url() {
+    local module="$1" version="$2" file_name="$3" remainder organisation repository
+    case "${module}" in
+        github.com/*/*)
+            remainder="${module#github.com/}"
+            organisation="${remainder%%/*}"
+            remainder="${remainder#*/}"
+            repository="${remainder%%/*}"
+            printf 'https://raw.githubusercontent.com/%s/%s/%s/%s' \
+                "${organisation}" "${repository}" "${version}" "${file_name}"
+            ;;
+        golang.org/x/*)
+            printf 'https://go.googlesource.com/%s/+/refs/tags/%s/%s?format=TEXT' \
+                "${module#golang.org/x/}" "${version}" "${file_name}"
+            ;;
+        *)
+            die "no license URL rule for the module ${module}." \
+                "Add one to go_license_url in hack/generate-third-party-notices.sh;" \
+                "this script will not guess a URL for a host it does not know."
+            ;;
+    esac
+}
+
+# Mirrors the C side: every file reproduced below gets a link, and the link is
+# only kept once its bytes match that reproduction.
+resolve_go_location() {
+    local package_path="$1" module_path="$2" version="$3"
+    local location_cell="" license_file file_name url remote_file package_path_slug
+    package_path_slug="$(printf '%s' "${package_path}" | tr '/' '_')"
+    while IFS= read -r license_file; do
+        [[ -z "${license_file}" ]] && continue
+        file_name="$(basename "${license_file}")"
+        url="$(go_license_url "${module_path}" "${version}" "${file_name}")"
+        remote_file="${WORK_DIR}/go/${package_path_slug}.${file_name}"
+        verify_remote_matches "${url}" "${license_file}" \
+            "${module_path} ${version} ${file_name}" "${remote_file}"
+        location_cell="${location_cell:+${location_cell} / }[${file_name}](${url})"
+    done < <(license_files_for "${LICENSES_DIR}/${package_path}")
+    [[ -n "${location_cell}" ]] \
+        || die "no license text was saved for ${package_path}; refusing to write a row without a verified location."
+    printf '%s' "${location_cell}"
+}
+
 emit_go_table() {
-    local package_path url license module_path
-    printf '| Package | License | Module |\n'
-    printf '|---------|---------|--------|\n'
-    while IFS=, read -r package_path url license module_path; do
+    local package_path url license module_path version location
+    printf '| Package | Version | License | Location |\n'
+    printf '|---------|---------|---------|----------|\n'
+    while IFS=, read -r package_path url license module_path version; do
         [[ -z "${package_path}" ]] && continue
+        location="$(resolve_go_location "${package_path}" "${module_path}" "${version}")"
         # shellcheck disable=SC2016  # backticks are literal markdown here.
-        printf '| `%s` | %s | `%s` |\n' "${package_path}" "${license}" "${module_path}"
+        printf '| `%s` | %s | %s | %s |\n' \
+            "${package_path}" "${version}" "${license}" "${location}"
     done < "${GO_INDEX}"
 }
 
 emit_go_sections() {
-    local package_path url license module_path license_files license_file
-    while IFS=, read -r package_path url license module_path; do
+    local package_path url license module_path version license_files license_file
+    while IFS=, read -r package_path url license module_path version; do
         [[ -z "${package_path}" ]] && continue
 
         printf '### %s\n\n' "${package_path}"
@@ -627,6 +713,11 @@ EOF
         cat <<'EOF'
 
 ## Go Dependency Index
+
+`Version` is the version vendored under `src/nvcgo/vendor` and linked into
+`libnvidia-container-go.so`. `Location` is that version's own license file
+upstream; as in the table above, each link was checked by fetching it and
+comparing it byte for byte with the text reproduced below.
 
 EOF
         emit_go_table

@@ -49,13 +49,18 @@ archive. Where a dependency has no license file to link, the column says why.
 
 ## Go Dependency Index
 
-| Package | License | Module |
-|---------|---------|--------|
-| `github.com/cilium/ebpf` | MIT | `github.com/cilium/ebpf` |
-| `github.com/google/uuid` | BSD-3-Clause | `github.com/google/uuid` |
-| `github.com/opencontainers/runtime-spec/specs-go` | Apache-2.0 | `github.com/opencontainers/runtime-spec` |
-| `github.com/sirupsen/logrus` | MIT | `github.com/sirupsen/logrus` |
-| `golang.org/x/sys/unix` | BSD-3-Clause | `golang.org/x/sys` |
+`Version` is the version vendored under `src/nvcgo/vendor` and linked into
+`libnvidia-container-go.so`. `Location` is that version's own license file
+upstream; as in the table above, each link was checked by fetching it and
+comparing it byte for byte with the text reproduced below.
+
+| Package | Version | License | Location |
+|---------|---------|---------|----------|
+| `github.com/cilium/ebpf` | v0.8.0 | MIT | [LICENSE](https://raw.githubusercontent.com/cilium/ebpf/v0.8.0/LICENSE) |
+| `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [LICENSE](https://raw.githubusercontent.com/google/uuid/v1.6.0/LICENSE) |
+| `github.com/opencontainers/runtime-spec/specs-go` | v1.2.0 | Apache-2.0 | [LICENSE](https://raw.githubusercontent.com/opencontainers/runtime-spec/v1.2.0/LICENSE) |
+| `github.com/sirupsen/logrus` | v1.9.4 | MIT | [LICENSE](https://raw.githubusercontent.com/sirupsen/logrus/v1.9.4/LICENSE) |
+| `golang.org/x/sys/unix` | v0.46.0 | BSD-3-Clause | [LICENSE](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/LICENSE?format=TEXT) |
 
 ## Bundled C Dependency License Texts
 
