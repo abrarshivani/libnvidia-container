@@ -60,7 +60,7 @@ comparing it byte for byte with the text reproduced below.
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [LICENSE](https://raw.githubusercontent.com/google/uuid/v1.6.0/LICENSE) |
 | `github.com/opencontainers/runtime-spec/specs-go` | v1.2.0 | Apache-2.0 | [LICENSE](https://raw.githubusercontent.com/opencontainers/runtime-spec/v1.2.0/LICENSE) |
 | `github.com/sirupsen/logrus` | v1.9.4 | MIT | [LICENSE](https://raw.githubusercontent.com/sirupsen/logrus/v1.9.4/LICENSE) |
-| `golang.org/x/sys/unix` | v0.46.0 | BSD-3-Clause | [LICENSE](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/LICENSE?format=TEXT) |
+| `golang.org/x/sys/unix` | v0.46.0 | BSD-3-Clause | [LICENSE](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/LICENSE?format=TEXT) / [PATENTS](https://go.googlesource.com/sys/+/refs/tags/v0.46.0/PATENTS?format=TEXT) |
 
 ## Bundled C Dependency License Texts
 
@@ -2012,8 +2012,8 @@ with the sysfs/PCI kernel facility.
 
 ### github.com/cilium/ebpf
 
+* Version: v0.8.0
 * License: MIT
-* Module: github.com/cilium/ebpf
 
 #### LICENSE
 
@@ -2047,8 +2047,8 @@ SOFTWARE.
 
 ### github.com/google/uuid
 
+* Version: v1.6.0
 * License: BSD-3-Clause
-* Module: github.com/google/uuid
 
 #### LICENSE
 
@@ -2086,8 +2086,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### github.com/opencontainers/runtime-spec/specs-go
 
+* Version: v1.2.0
 * License: Apache-2.0
-* Module: github.com/opencontainers/runtime-spec
 
 #### LICENSE
 
@@ -2289,8 +2289,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### github.com/sirupsen/logrus
 
+* Version: v1.9.4
 * License: MIT
-* Module: github.com/sirupsen/logrus
 
 #### LICENSE
 
@@ -2322,8 +2322,8 @@ THE SOFTWARE.
 
 ### golang.org/x/sys/unix
 
+* Version: v0.46.0
 * License: BSD-3-Clause
-* Module: golang.org/x/sys
 
 #### LICENSE
 
@@ -2355,6 +2355,34 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+```
+
+#### PATENTS
+
+```text
+Additional IP Rights Grant (Patents)
+
+"This implementation" means the copyrightable works distributed by
+Google as part of the Go project.
+
+Google hereby grants to You a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable (except as stated in this section)
+patent license to make, have made, use, offer to sell, sell, import,
+transfer and otherwise run, modify and propagate the contents of this
+implementation of Go, where such license applies only to those patent
+claims, both currently owned or controlled by Google and acquired in
+the future, licensable by Google that are necessarily infringed by this
+implementation of Go.  This grant does not include claims that would be
+infringed only as a consequence of further modification of this
+implementation.  If you or your agent or exclusive licensee institute or
+order or agree to the institution of patent litigation against any
+entity (including a cross-claim or counterclaim in a lawsuit) alleging
+that this implementation of Go or any code incorporated within this
+implementation of Go constitutes direct or contributory patent
+infringement, or inducement of patent infringement, then any patent
+rights granted to you under this License for this implementation of Go
+shall terminate as of the date such litigation is filed.
 
 ```
 

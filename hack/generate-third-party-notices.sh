@@ -17,7 +17,8 @@ set -euo pipefail
 
 OUTPUT="${OUTPUT:-THIRD_PARTY_NOTICES.md}"
 GO_DIR="${GO_DIR:-src/nvcgo}"
-MODULES_TXT="${MODULES_TXT:-${GO_DIR}/vendor/modules.txt}"
+GO_VENDOR_DIR="${GO_VENDOR_DIR:-${GO_DIR}/vendor}"
+MODULES_TXT="${MODULES_TXT:-${GO_VENDOR_DIR}/modules.txt}"
 ROOT_MK="${ROOT_MK:-Makefile}"
 DOCKER_MK="${DOCKER_MK:-mk/docker.mk}"
 
@@ -515,14 +516,55 @@ collect_c_notices() {
 }
 
 license_files_for() {
-    local dir="$1" candidate_file
+    local dir="$1" candidate_file candidate_name
     [[ -d "${dir}" ]] || return 0
     while IFS= read -r -d '' candidate_file; do
-        if printf '%s' "$(basename "${candidate_file}")" \
+        candidate_name="$(basename "${candidate_file}")"
+        # Reading the vendor tree rather than a licenses-only cache means the
+        # name pattern below now also sees source files that merely start with
+        # a license-shaped header, such as a license.go.
+        case "${candidate_name}" in
+            *.go|*.c|*.h|*.s|*.py|*.sh|*.java|*.ts|*.js) continue ;;
+        esac
+        if printf '%s' "${candidate_name}" \
             | LC_ALL=C grep -qiE '^(licen[cs]e|notice|copying|copyright|authors|patents)([-._].*)?$'; then
             printf '%s\n' "${candidate_file}"
         fi
     done < <(find "${dir}" -maxdepth 1 -type f -print0 2>/dev/null | LC_ALL=C sort -z)
+}
+
+# The first enclosing directory holding a license file wins, which is how
+# go-licenses attributes them. Prints the directory relative to the module root.
+license_dir_within_module() {
+    local dir="$1" module="$2" relative
+    while :; do
+        if [[ -n "$(license_files_for "${GO_VENDOR_DIR}/${dir}")" ]]; then
+            relative="${dir#"${module}"}"
+            printf '%s' "${relative#/}"
+            return 0
+        fi
+        [[ "${dir}" == "${module}" ]] && return 1
+        [[ "${dir}" != */* ]] && return 1
+        dir="${dir%/*}"
+    done
+}
+
+# Every license file the module ships, as paths relative to its root. Reading
+# the vendor tree rather than the 'go-licenses save' output is deliberate: save
+# keeps only the one file it classifies as the license and drops the rest, so
+# golang.org/x/sys lost its PATENTS grant, which is separate terms rather than
+# a restatement of the LICENSE beside it.
+go_license_paths_for() {
+    local package_path="$1" module_path="$2" relative_dir governing_dir license_file
+    relative_dir="$(license_dir_within_module "${package_path}" "${module_path}")" \
+        || die "no license file found for ${package_path} under ${GO_VENDOR_DIR}/${module_path}." \
+               "Re-run 'go mod vendor' in ${GO_DIR}."
+    governing_dir="${GO_VENDOR_DIR}/${module_path}${relative_dir:+/${relative_dir}}"
+    while IFS= read -r license_file; do
+        [[ -z "${license_file}" ]] && continue
+        printf '%s\t%s\n' \
+            "${relative_dir:+${relative_dir}/}$(basename "${license_file}")" "${license_file}"
+    done < <(license_files_for "${governing_dir}")
 }
 
 emit_fenced_file() {
@@ -573,7 +615,7 @@ emit_c_sections() {
 # Anything else stops the run rather than guessing a URL shape: a link that
 # resolves to the wrong project is worse in a license document than no link.
 go_license_url() {
-    local module="$1" version="$2" file_name="$3" remainder organisation repository
+    local module="$1" version="$2" path_in_module="$3" remainder organisation repository
     case "${module}" in
         github.com/*/*)
             remainder="${module#github.com/}"
@@ -581,11 +623,11 @@ go_license_url() {
             remainder="${remainder#*/}"
             repository="${remainder%%/*}"
             printf 'https://raw.githubusercontent.com/%s/%s/%s/%s' \
-                "${organisation}" "${repository}" "${version}" "${file_name}"
+                "${organisation}" "${repository}" "${version}" "${path_in_module}"
             ;;
         golang.org/x/*)
             printf 'https://go.googlesource.com/%s/+/refs/tags/%s/%s?format=TEXT' \
-                "${module#golang.org/x/}" "${version}" "${file_name}"
+                "${module#golang.org/x/}" "${version}" "${path_in_module}"
             ;;
         *)
             die "no license URL rule for the module ${module}." \
@@ -599,19 +641,19 @@ go_license_url() {
 # only kept once its bytes match that reproduction.
 resolve_go_location() {
     local package_path="$1" module_path="$2" version="$3"
-    local location_cell="" license_file file_name url remote_file package_path_slug
+    local location_cell="" path_in_module license_file file_name url remote_file package_path_slug
     package_path_slug="$(printf '%s' "${package_path}" | tr '/' '_')"
-    while IFS= read -r license_file; do
-        [[ -z "${license_file}" ]] && continue
+    while IFS=$'\t' read -r path_in_module license_file; do
+        [[ -z "${path_in_module}" ]] && continue
         file_name="$(basename "${license_file}")"
-        url="$(go_license_url "${module_path}" "${version}" "${file_name}")"
+        url="$(go_license_url "${module_path}" "${version}" "${path_in_module}")"
         remote_file="${WORK_DIR}/go/${package_path_slug}.${file_name}"
         verify_remote_matches "${url}" "${license_file}" \
-            "${module_path} ${version} ${file_name}" "${remote_file}"
+            "${module_path} ${version} ${path_in_module}" "${remote_file}"
         location_cell="${location_cell:+${location_cell} / }[${file_name}](${url})"
-    done < <(license_files_for "${LICENSES_DIR}/${package_path}")
+    done < <(go_license_paths_for "${package_path}" "${module_path}")
     [[ -n "${location_cell}" ]] \
-        || die "no license text was saved for ${package_path}; refusing to write a row without a verified location."
+        || die "no license file found for ${package_path}; refusing to write a row without a verified location."
     printf '%s' "${location_cell}"
 }
 
@@ -629,21 +671,21 @@ emit_go_table() {
 }
 
 emit_go_sections() {
-    local package_path url license module_path version license_files license_file
+    local package_path url license module_path version license_files license_file path_in_module
     while IFS=, read -r package_path url license module_path version; do
         [[ -z "${package_path}" ]] && continue
 
         printf '### %s\n\n' "${package_path}"
-        printf '* License: %s\n' "${license}"
-        printf '* Module: %s\n\n' "${module_path}"
+        printf '* Version: %s\n' "${version}"
+        printf '* License: %s\n\n' "${license}"
 
         license_files=()
-        while IFS= read -r license_file; do
-            [[ -n "${license_file}" ]] && license_files+=("${license_file}")
-        done < <(license_files_for "${LICENSES_DIR}/${package_path}")
+        while IFS=$'\t' read -r path_in_module license_file; do
+            [[ -n "${path_in_module}" ]] && license_files+=("${license_file}")
+        done < <(go_license_paths_for "${package_path}" "${module_path}")
 
         (( ${#license_files[@]} > 0 )) \
-            || die "no license text was saved for ${package_path}; refusing to write a notices file that omits it."
+            || die "no license file found for ${package_path}; refusing to write a notices file that omits it."
 
         for license_file in "${license_files[@]}"; do
             printf '#### %s\n\n' "$(basename "${license_file}")"
